@@ -1,0 +1,121 @@
+---
+title: "healthcare_HW4_Rcode"
+author: "Group 5"
+date: "11/30/2019"
+output: html_document
+---
+Data prepocessing
+```{r}
+rm(list=ls())
+library(tidyverse)
+library(data.table)
+vtinp16_dt = fread("~/Desktop/Brandeis/Healthcare Analytics/HW3/VTINP16_upd.csv")
+vtoutp16_dt = fread("~/Desktop/Brandeis/Healthcare Analytics/HW3/VTOUTP16.csv")
+vted16_dt = fread("~/Desktop/Brandeis/Healthcare Analytics/HW3/VTED16.csv")
+vtrevcode16_dt = fread("~/Desktop/Brandeis/Healthcare Analytics/HW3/VTREVCODE16.csv")
+```
+
+```{r}
+# read RA_ICD10_Codes file
+library("readxl")
+#function to read all sheets of a workbook
+read_excel_allsheets <- function(a) {
+  sheets <- readxl::excel_sheets(a)
+  x <-    lapply(sheets, function(X) readxl::read_excel(a, sheet = X))
+  names(x) <- sheets
+  x
+}
+
+RA_ICD10_Codes <- read_excel_allsheets("RA_ICD10_Codes.xlsx")
+
+rheumatoid_arthritis = RA_ICD10_Codes[[1]]
+Other_RA = RA_ICD10_Codes[[2]]
+```
+
+
+
+Step 1: Identify the RA cohort using the outpatient file
+```{r}
+Other_RA_dt = as.data.table(Other_RA)
+rheumatoid_arthritis_dt = as.data.table(rheumatoid_arthritis)
+Other_RA_dt[, ICD_Codes := `ICD-10 Codes`]
+rheumatoid_arthritis_dt[, ICD_Codes := `ICD-10 Codes`]
+
+outpatient_Other_RA = Reduce(function(x, y) merge(x, y, all=TRUE), lapply(as.list(1:20), function(x) {vtoutp16_dt[Other_RA_dt, on = sprintf("DX%s == ICD-10 Codes", x), nomatch = NULL]})) %>% filter(!duplicated(Uniq))
+outpatient_rheumatoid_arthritis = Reduce(function(x, y) merge(x, y, all=TRUE), lapply(as.list(1:20), function(x) {vtoutp16_dt[rheumatoid_arthritis_dt, on = sprintf("DX%s == ICD-10 Codes", x), nomatch = NULL]})) %>% filter(!duplicated(Uniq))
+```
+
+
+Step 2: Identify the most common types of the RA
+```{r}
+outpatient_Other_RA_count = 
+  outpatient_Other_RA %>% 
+  group_by(ICD_Codes) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count)) %>% 
+  top_n(3, count)
+outpatient_Other_RA_count
+
+
+outpatient_rheumatoid_arthritis_count = 
+  outpatient_rheumatoid_arthritis %>% 
+  group_by(ICD_Codes) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count)) %>% 
+  top_n(3, count)
+outpatient_rheumatoid_arthritis_count
+
+```
+
+Step 3: Gender differences in RA
+```{r}
+# Gender differences in other RA
+withRA_other = vtoutp16_dt %>% 
+  left_join(outpatient_Other_RA, by = "Uniq") %>% 
+  mutate(RA = ifelse(as.integer(is.na(ICD_Codes)) == 1, 0, 1)) %>% 
+  group_by(sex.x, RA) %>% 
+  summarise(count = n()) %>% 
+  drop_na() %>% 
+  pivot_wider(names_from = sex.x, values_from = count)
+withRA_other
+
+# Gender differences in RA
+withRA_rheumatoid_arthritis = vtoutp16_dt %>% 
+  left_join(outpatient_rheumatoid_arthritis, by = "Uniq") %>% 
+  mutate(RA = ifelse(as.integer(is.na(ICD_Codes)) == 1, 0, 1)) %>% 
+  group_by(sex.x, RA) %>% 
+  summarise(count = n()) %>% 
+  drop_na() %>% 
+  pivot_wider(names_from = sex.x, values_from = count)
+withRA_rheumatoid_arthritis
+
+# Fisher's exact test of Gender differences in other RA
+withRA_other_fisher = as.matrix(withRA_other %>% select("Male" = 2 , "Female" = 3))
+rownames(withRA_other_fisher) = c(0, 1)
+fisher.test(withRA_other_fisher)
+
+# Fisher's exact test of Gender differences in RA
+withRA_rheumatoid_arthritis_fisher = as.matrix(withRA_rheumatoid_arthritis %>% select("Male" = 2 , "Female" = 3))
+rownames(withRA_rheumatoid_arthritis_fisher) = c(0, 1)
+fisher.test(withRA_rheumatoid_arthritis_fisher)
+```
+
+Step 4: Calculate the inter-quartile range of the costs
+```{r}
+charges = vtoutp16_dt %>% 
+  select(CHRGS) %>% 
+  arrange(desc(CHRGS))
+  
+quantile(charges[,1], probs = seq(0, 1, 0.25))
+```
+
+Step 5: Study of service utilization
+```{r}
+# other_RA
+setDT(outpatient_Other_RA)
+outpatient_Other_RA[vtrevcode16_dt, on = "Uniq", nomatch = NULL][, .(count = .N), by = REVCODE][order(desc(count))][,head(.SD, 5)]
+# RA(rheumatoid_arthritis)
+setDT(outpatient_rheumatoid_arthritis)
+outpatient_rheumatoid_arthritis[vtrevcode16_dt, on = "Uniq", nomatch = NULL][, .(count = .N), by = REVCODE][order(desc(count))][, .SD[1:5]]
+```
+
